@@ -1,0 +1,1305 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use ieee.std_logic_unsigned.all;
+ 
+entity axis_i2s2_vhdl is
+ Generic ( constant EOF_COUNT :std_logic_vector(8 downto 0) := "111000111" ); 
+    Port ( axis_clk    : in std_logic;
+           axis_resetn : in std_logic;
+          --AXIS SLAVE INTERFACE
+           tx_axis_s_data  : in  std_logic_vector (31 downto 0);
+           tx_axis_s_valid : in  std_logic;
+           tx_axis_s_ready : out std_logic;
+           tx_axis_s_last  : in  std_logic;
+          --AXIS MASTER INTERFACE
+           rx_axis_m_data  : out std_logic_vector (31 downto 0);
+           rx_axis_m_valid : out std_logic;
+           rx_axis_m_ready : in  std_logic;
+           rx_axis_m_last  : out std_logic;
+          --I2S TRANSMITTER INTERFACE  
+           tx_mclk  : out std_logic;
+           tx_lrck  : out std_logic;
+           tx_sclk  : out std_logic;
+           tx_sdout : out std_logic;
+          --I2S RECEIVER INTERFACE   
+           rx_mclk : out std_logic;
+           rx_lrck : out std_logic;
+           rx_sclk : out std_logic;
+           rx_sdin : in  std_logic :='0' );
+end axis_i2s2_vhdl;
+ 
+architecture Behavioral of axis_i2s2_vhdl is
+
+signal count : std_logic_vector(8 downto 0) := (others => '0');                            
+                                              
+signal lrck : std_logic; 
+signal sclk : std_logic;  
+signal mclk : std_logic;
+  
+signal tx_data_l : std_logic_vector(31 downto 0) := (others => '0');
+signal tx_data_r : std_logic_vector(31 downto 0) := (others => '0');
+  
+signal tx_data_l_shift : std_logic_vector(23 downto 0) :=(others => '0');
+signal tx_data_r_shift : std_logic_vector(23 downto 0) :=(others => '0');
+  
+signal rx_data_l_shift :std_logic_vector(23 downto 0) :=(others => '0');
+signal rx_data_r_shift :std_logic_vector(23 downto 0) :=(others => '0');
+  
+signal rx_data_l :std_logic_vector(31 downto 0) := (others => '0');
+signal rx_data_r :std_logic_vector(31 downto 0) := (others => '0');  
+
+signal tx_axis_s_ready_interna : std_logic := '0';
+signal rx_axis_m_valid_interna : std_logic := '0';
+signal rx_axis_m_last_interna  : std_logic := '0'; 
+
+begin
+ 
+lrck <= count(8);  
+sclk <= count(2);   
+mclk <= axis_clk;
+
+  tx_lrck <= lrck;  
+  tx_sclk <= sclk;
+  tx_mclk <= mclk;
+  rx_lrck <= lrck;
+  rx_sclk <= sclk;
+  rx_mclk <= mclk;
+   
+    tx_axis_s_ready <= tx_axis_s_ready_interna;      
+    rx_axis_m_valid <= rx_axis_m_valid_interna; 
+    rx_axis_m_last  <= rx_axis_m_last_interna; 
+ 
+process(axis_clk)
+begin
+    if rising_edge(axis_clk) then  
+          count <= count + 1;
+    end if;
+end process;
+  
+process(axis_clk)
+begin                                       
+ if( rising_edge(axis_clk)) then
+    if( axis_resetn = '0') then
+          tx_axis_s_ready_interna <= '0';  
+    elsif (tx_axis_s_ready_interna = '1') and (tx_axis_s_valid = '1')
+               and (tx_axis_s_last = '1') then 
+          tx_axis_s_ready_interna <= '0';
+    elsif (count = "000000000") then  
+          tx_axis_s_ready_interna <= '0';
+    elsif (count = EOF_COUNT) then 
+          tx_axis_s_ready_interna <= '1';   
+     end if;
+   end if;
+end process;
+ 
+process(axis_clk)    
+begin
+   if( rising_edge(axis_clk)) then
+       if (axis_resetn = '0') then    
+           tx_data_r <= (others => '0');
+           tx_data_l <= (others => '0');
+       elsif (tx_axis_s_valid = '1' and tx_axis_s_ready_interna = '1')then 
+       if (tx_axis_s_last = '1') then                            
+           tx_data_r <= tx_axis_s_data;                           
+       else         
+          tx_data_l <= tx_axis_s_data;
+        end if;     
+       end if;
+     end if;
+  end process;
+    
+process(axis_clk)
+begin
+  if (rising_edge(axis_clk)) then
+      if (count = "000000111") then
+         tx_data_l_shift <= tx_data_l(23 downto 0);
+         tx_data_r_shift <= tx_data_r(23 downto 0);
+      elsif (count(2 downto 0) = "111") and (count(7 downto 3) >= "00001")
+         and (count(7 downto 3) <= "11000") then 
+         if(count(8) = '1') then
+            tx_data_r_shift <= tx_data_r_shift(22 downto 0) & '0'; 
+         else
+            tx_data_l_shift <= tx_data_l_shift(22 downto 0) & '0';
+         end if;
+       end if;
+   end if;
+end process;
+      
+process(count,tx_data_r_shift,tx_data_l_shift)
+begin
+  if(count(7 downto 3)<= "00001") and (count(7 downto 3)>= "11000")then
+            if(count(8) = '1') then
+                tx_sdout <= tx_data_r_shift(23); 
+            else
+                tx_sdout <= tx_data_l_shift(23);
+            end if;
+        else
+            tx_sdout <= '0';
+        end if;
+    end process;  
+       
+  process(axis_clk)
+  begin
+     if (rising_edge(axis_clk)) then
+       if(count (2 downto 0) = "000") and (count(7 downto 3) >= "00001")
+     and (count(7 downto 3) <= "11000") then
+         if (lrck = '1') then
+             rx_data_r_shift <= rx_data_r_shift(22 downto 0) & rx_sdin;
+         else
+             rx_data_l_shift <= rx_data_l_shift(22 downto 0) & rx_sdin;
+         end if;
+        end if;
+       end if;
+    end process;
+    
+process(axis_clk)
+begin
+  if (rising_edge(axis_clk)) then
+      if(axis_resetn = '0') then  
+         rx_data_l <= (others => '0');
+         rx_data_r <= (others => '0');
+      elsif (count=EOF_COUNT) and (rx_axis_m_valid_interna='0')then
+         rx_data_l <= ("00000000" & rx_data_l_shift);                  
+         rx_data_r <= ("00000000" & rx_data_r_shift);
+        end if;
+        end if;
+    end process;
+      
+     rx_axis_m_data <=  rx_data_l when (rx_axis_m_last_interna = '0')     
+                                  else  rx_data_r;  
+  process(axis_clk)
+  begin                                                  
+    if (rising_edge(axis_clk)) then
+      if(axis_resetn = '0') then
+          rx_axis_m_valid_interna <= '0';
+       elsif (count=EOF_COUNT) and (rx_axis_m_valid_interna = '0')then 
+            rx_axis_m_valid_interna <= '1';
+       elsif (rx_axis_m_valid_interna = '1') and (rx_axis_m_ready ='1')
+         and (rx_axis_m_last_interna = '1') then  
+                      rx_axis_m_valid_interna <= '0';
+            end if;
+        end if;
+  end process;
+    
+process(axis_clk)
+begin                                                    
+  if (rising_edge(axis_clk)) then
+     if(axis_resetn = '0') then
+         rx_axis_m_last_interna <= '0';  
+     elsif(count = EOF_COUNT) and (rx_axis_m_valid_interna = '0') then
+         rx_axis_m_last_interna <= '0';
+     elsif(rx_axis_m_valid_interna='1') and (rx_axis_m_ready = '1')then
+           rx_axis_m_last_interna <= not(rx_axis_m_last_internal);
+     end if;
+     end if;
+    end process;
+  
+end Behavioral;
+
+
+---------------------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+use IEEE.STD_LOGIC_SIGNED.ALL;
+
+entity axis_volume_controller_vhdl is
+Generic(CONSTANT HEX: integer := 15;
+        CONSTANT SWITCH_WIDTH : integer := 4; 
+        CONSTANT DATA_WIDTH : integer := 24;
+        CONSTANT MULTIPLIER_WIDTH : integer := 24    );           
+Port(clk : in  std_logic;                                           
+     sw : in  std_logic_vector(SWITCH_WIDTH-1 downto 0)
+     := (others => '0');          
+     
+     s_axis_data : in  std_logic_vector(DATA_WIDTH-1 downto 0)
+     :=(others =>'0');    
+     s_axis_valid : in  std_logic:='0';
+     s_axis_ready : out std_logic;        
+     s_axis_last  : in  std_logic:='0';
+    
+     m_axis_data : out std_logic_vector(DATA_WIDTH-1 downto 0)
+     :=(others =>'0');    
+     m_axis_valid : out std_logic; 
+     m_axis_ready : in  std_logic:='0';  
+     m_axis_last  : out std_logic        );
+    
+end axis_volume_controller_vhdl;
+
+architecture Behavioral of axis_volume_controller_vhdl is
+
+Type type_data is array (1 downto 0) of 
+std_logic_vector(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto 0); 
+Signal data : type_data := (others =>(others => '0'));  
+    
+Type type_data_aux is array (1 downto 0) of 
+std_logic_vector(MULTIPLIER_WIDTH*4-1 downto 0); 
+Signal data_aux : type_data_aux := (others =>(others => '0'));
+  
+Signal multiplier     :
+std_logic_vector(MULTIPLIER_WIDTH downto 0):= (others =>'0') ; 
+Signal multiplier_aux :
+std_logic_vector(MULTIPLIER_WIDTH+SWITCH_WIDTH-1 downto 0)
+:=(others =>'0');   
+  
+  Signal m_new_word     : std_logic:='0';                                                                                    
+  Signal m_new_packet   : std_logic:='0';
+    
+  Signal s_new_word     : std_logic:='0';
+  Signal s_new_packet   : std_logic:='0'; 
+  Signal s_new_packet_r : std_logic:='1';
+  
+  Signal m_axis_last_interna  : std_logic := '0';
+  Signal m_axis_valid_interna : std_logic := '0';
+  Signal s_axis_ready_interna : std_logic := '1'; 
+  
+begin
+ 
+m_axis_last  <= m_axis_last_interna;     
+m_axis_valid <= m_axis_valid_interna; 
+s_axis_ready <= s_axis_ready_interna; 
+                           
+m_new_word  <= '1' when (m_axis_valid_interna = '1' and m_axis_ready ='1') 
+                      else '0';
+m_new_packet<='1' when (m_new_word = '1' and m_axis_last_interna='1') 
+                      else '0'; --m_axis_last_interna
+                         
+s_new_word  <='1' when (s_axis_valid = '1' and s_axis_ready_interna='1') 
+                      else '0';                    
+s_new_packet<='1' when (s_new_word = '1' and s_axis_last = '1') 
+                      else '0';                                                 
+multiplier_aux(MULTIPLIER_WIDTH-1 downto 0) <= (others=>'0');
+multiplier_aux(MULTIPLIER_WIDTH+SWITCH_WIDTH-1 downto MULTIPLIER_WIDTH)<=sw; 
+                   
+process(clk)
+begin
+  if (rising_edge(clk)) then     
+  multiplier <= std_logic_vector(to_unsigned
+               (to_integer(unsigned(multiplier_aux))
+                /HEX, MULTIPLIER_WIDTH+1));		
+  s_new_packet_r <= s_new_packet;  
+  end if;  
+end process;
+  
+data_aux(0)<=std_logic_vector(signed(data(0))
+*to_integer(unsigned(multiplier))); 
+data_aux(1)<=std_logic_vector(signed(data(1))
+*to_integer(unsigned(multiplier))); 
+  
+process(clk)
+begin
+if (rising_edge(clk)) then    
+ if (s_new_word = '1') then 
+   if (s_axis_last = '0') then
+    data(0)(DATA_WIDTH-1 downto 0) <= s_axis_data;   
+    data(0)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto DATA_WIDTH)<=(others =>
+    s_axis_data(DATA_WIDTH-1)); 
+   else
+    data(1)(DATA_WIDTH-1 downto 0) <= s_axis_data;
+    data(1)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto DATA_WIDTH)<=(others =>    
+    s_axis_data(DATA_WIDTH-1));
+   end if;
+  elsif (s_new_packet_r = '1') then       
+    data(0) <= data_aux(0)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto 0);		 
+    data(1) <= data_aux(1)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto 0);
+   end if;
+  end if;
+end process;   
+  
+  process(clk)
+  begin
+    if (rising_edge(clk)) then
+      if (s_new_packet_r = '1') then
+        m_axis_valid_interna <= '1';
+      elsif (m_new_packet = '1') then
+        m_axis_valid_interna <= '0';
+      end if;     
+    end if;
+  end process;  
+
+  process(clk)     
+  begin
+    if (rising_edge(clk)) then
+      if (m_new_packet = '1') then
+        m_axis_last_interna <= '0';
+      elsif (m_new_word = '1') then
+        m_axis_last_interna <= '1';
+      end if;     
+    end if;
+  end process;
+  
+process(data(0),data(1),m_axis_valid_interna,m_axis_last_interna)
+begin
+ if(m_axis_valid_interna='1'and m_axis_last_interna='0') then
+  m_axis_data<=data(0)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto MULTIPLIER_WIDTH);
+ elsif (m_axis_valid_interna='1'and m_axis_last_interna='1') then
+  m_axis_data<=data(1)(MULTIPLIER_WIDTH+DATA_WIDTH-1 downto MULTIPLIER_WIDTH);
+ else
+   m_axis_data <= (others => '0');
+ end if;
+end process;
+  
+  process(clk) 
+  begin
+    if (rising_edge(clk)) then               --
+      if (s_new_packet = '1') then
+        s_axis_ready_interna <= '0';
+      elsif (m_new_packet = '1') then
+        s_axis_ready_interna <= '1';
+      end if;     
+    end if;
+  end process;
+  
+end Behavioral;
+
+--------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity filtered_fir is
+  Port (    aclk : in STD_LOGIC;
+            ctrl : in STD_LOGIC_VECTOR (1 downto 0);
+            
+            axis_tx_valid_enA, axis_tx_last_enA : in STD_LOGIC;     
+            axis_tx_ready_enA : out STD_LOGIC;
+            axis_tx_data_enA : in STD_LOGIC_VECTOR (23 downto 0);
+ 
+            axis_tx_valid_salB, axis_tx_last_salB : out STD_LOGIC;  
+            axis_tx_ready_salB : in STD_LOGIC;
+            axis_tx_data_salB : out STD_LOGIC_VECTOR (31 downto 0) );
+end filtered_fir;
+
+architecture Behavioral of filtered_fir is
+ 
+ signal valid_in1, last_in1, valid_out1, last_out1, ready_out1  : STD_LOGIC;
+ signal data_in1  : STD_LOGIC_VECTOR (23 downto 0);
+ signal data_out1 : STD_LOGIC_VECTOR (31 downto 0);
+ 
+ signal valid_in2, last_in2, valid_out2, last_out2, ready_out2  : STD_LOGIC;
+ signal data_in2  : STD_LOGIC_VECTOR (23 downto 0);
+ signal data_out2 : STD_LOGIC_VECTOR (31 downto 0);
+ 
+ signal valid_in3, last_in3, valid_out3, last_out3, ready_out3  : STD_LOGIC;
+ signal data_in3  : STD_LOGIC_VECTOR (23 downto 0);
+ signal data_out3 : STD_LOGIC_VECTOR (31 downto 0);
+ 
+ signal valid_in4, last_in4, ready_in4 : STD_LOGIC;
+ signal data_in4  : STD_LOGIC_VECTOR (31 downto 0);
+ 
+ signal ready_in1, ready_in2, ready_in3 : STD_LOGIC;
+
+  component demux_1x4
+       port (ctrl: in STD_LOGIC_VECTOR (1 downto 0);
+       
+             axis_tx_valid_en, axis_tx_last_en    : in STD_LOGIC;
+             axis_tx_ready_en :out STD_LOGIC;
+             axis_tx_data_en : in STD_LOGIC_VECTOR (23 downto 0); 
+             
+             axis_tx_valid_CG1, axis_tx_last_CG1  : out STD_LOGIC;
+             axis_tx_ready_CG1 : in STD_LOGIC;
+             axis_tx_data_CG1  : out STD_LOGIC_VECTOR (23 downto 0); 
+              
+             axis_tx_valid_CG2, axis_tx_last_CG2  : out STD_LOGIC;    
+             axis_tx_ready_CG2 : in STD_LOGIC;
+             axis_tx_data_CG2  : out STD_LOGIC_VECTOR (23 downto 0);
+             
+             axis_tx_valid_CG3, axis_tx_last_CG3  : out STD_LOGIC;     
+             axis_tx_ready_CG3 : in STD_LOGIC;
+             axis_tx_data_CG3  : out STD_LOGIC_VECTOR (23 downto 0);
+             
+             axis_tx_valid_CG4, axis_tx_last_CG4  : out STD_LOGIC;
+             axis_tx_ready_CG4 : in STD_LOGIC;
+             axis_tx_data_CG4  : out STD_LOGIC_VECTOR (23 downto 0)      ); 
+  end component;
+      component mux_4x1
+         port (ctrl: in STD_LOGIC_VECTOR (1 downto 0);
+         
+               axis_tx_valid_sal, axis_tx_last_sal : out STD_LOGIC; 
+               axis_tx_ready_sal : in STD_LOGIC;
+               axis_tx_data_sal : out STD_LOGIC_VECTOR (31 downto 0);
+                    
+               axis_tx_valid_CF1, axis_tx_last_CF1 : in STD_LOGIC;
+               axis_tx_ready_CF1 : out STD_LOGIC;                  
+               axis_tx_data_CF1  : in STD_LOGIC_VECTOR (31 downto 0);
+                    
+               axis_tx_valid_CF2, axis_tx_last_CF2 : in STD_LOGIC;
+               axis_tx_ready_CF2 : out STD_LOGIC;         
+               axis_tx_data_CF2  : in STD_LOGIC_VECTOR (31 downto 0);
+                    
+               axis_tx_valid_CF3, axis_tx_last_CF3 : in STD_LOGIC;
+               axis_tx_ready_CF3 : out STD_LOGIC;
+               axis_tx_data_CF3  : in STD_LOGIC_VECTOR (31 downto 0);
+                    
+               axis_tx_valid_CF4, axis_tx_last_CF4 : in STD_LOGIC;
+               axis_tx_ready_CF4 : out STD_LOGIC;
+               axis_tx_data_CF4  : in STD_LOGIC_VECTOR (31 downto 0) );
+      end component;
+  component fir_compiler_0
+          port (aclk : in STD_LOGIC;  
+                s_axis_data_tvalid, s_axis_data_tlast: in STD_LOGIC;
+                s_axis_data_tready : out STD_LOGIC;               
+                s_axis_data_tdata :  in STD_LOGIC_VECTOR (23 downto 0);
+                
+                m_axis_data_tvalid, m_axis_data_tlast: out STD_LOGIC;
+                m_axis_data_tready : in STD_LOGIC;
+                m_axis_data_tdata :  out STD_LOGIC_VECTOR (31 downto 0) );
+  end component;
+  
+ component fir_compiler_1
+            port (aclk : in STD_LOGIC;
+            
+                  s_axis_data_tvalid, s_axis_data_tlast: in STD_LOGIC;
+                  s_axis_data_tready : out STD_LOGIC;
+                  s_axis_data_tdata :  in STD_LOGIC_VECTOR (23 downto 0);
+                 
+                  m_axis_data_tvalid, m_axis_data_tlast: out STD_LOGIC;
+                  m_axis_data_tready : in STD_LOGIC;
+                  m_axis_data_tdata :  out STD_LOGIC_VECTOR (31 downto 0) );
+    end component; 
+    
+ component fir_compiler_2
+              port (aclk : in STD_LOGIC;
+              
+                    s_axis_data_tvalid, s_axis_data_tlast: in STD_LOGIC;
+                    s_axis_data_tready : out STD_LOGIC;
+                    s_axis_data_tdata : in STD_LOGIC_VECTOR(23 downto 0);
+                    
+                    m_axis_data_tvalid, m_axis_data_tlast: out STD_LOGIC;
+                    m_axis_data_tready : in STD_LOGIC;
+                    m_axis_data_tdata : out STD_LOGIC_VECTOR(31 downto 0));
+      end component;   
+ 
+begin
+     DEMUX: demux_1x4 
+        port map (   ctrl=> ctrl,
+        
+                     axis_tx_valid_en => axis_tx_valid_enA,
+                     axis_tx_last_en  => axis_tx_last_enA,
+                     axis_tx_ready_en => axis_tx_ready_enA,
+                     axis_tx_data_en  => axis_tx_data_enA,
+                     
+                     axis_tx_valid_CG1 => valid_in1,
+                     axis_tx_last_CG1  => last_in1,
+                     axis_tx_ready_CG1 => ready_out1,
+                     axis_tx_data_CG1  => data_in1,
+                     
+                     axis_tx_valid_CG2 => valid_in2,
+                     axis_tx_last_CG2  => last_in2,
+                     axis_tx_ready_CG2 => ready_out2,
+                     axis_tx_data_CG2  => data_in2,
+                                         
+                     axis_tx_valid_CG3 => valid_in3,
+                     axis_tx_last_CG3  => last_in3,
+                     axis_tx_ready_CG3 => ready_out3,
+                     axis_tx_data_CG3  => data_in3,
+                     
+                     axis_tx_valid_CG4 => valid_in4,
+                     axis_tx_last_CG4  => last_in4,
+                     axis_tx_ready_CG4 => ready_in4,
+                     axis_tx_data_CG4  => data_in4( 23 downto 0)    );       
+  
+MUX: mux_4x1 
+       port map (    ctrl=> ctrl,
+                       
+                     axis_tx_valid_sal => axis_tx_valid_salB,
+                     axis_tx_last_sal  => axis_tx_last_salB,
+                     axis_tx_ready_sal => axis_tx_ready_salB,
+                     axis_tx_data_sal  => axis_tx_data_salB,
+                                    
+                     axis_tx_valid_CF1 => valid_out1,
+                     axis_tx_last_CF1  => last_out1,
+                     axis_tx_ready_CF1 => ready_in1,
+                     axis_tx_data_CF1  => data_out1,
+                                    
+                     axis_tx_valid_CF2 => valid_out2,
+                     axis_tx_last_CF2  => last_out2,
+                     axis_tx_ready_CF2 => ready_in2,
+                     axis_tx_data_CF2  => data_out2,
+                                                        
+                     axis_tx_valid_CF3 => valid_out3,
+                     axis_tx_last_CF3  => last_out3,
+                     axis_tx_ready_CF3 => ready_in3,
+                     axis_tx_data_CF3  => data_out3,
+                                    
+                     axis_tx_valid_CF4 => valid_in4,
+                     axis_tx_last_CF4  => last_in4,
+                     axis_tx_ready_CF4 => ready_in4,
+                     axis_tx_data_CF4  => data_in4  );
+    
+ XL1 : fir_compiler_0
+       port map (  aclk => aclk,
+                   s_axis_data_tvalid => valid_in1,
+                   s_axis_data_tlast  => last_in1, 
+                   s_axis_data_tready => ready_out1,
+                   s_axis_data_tdata  => data_in1,
+                                                                              
+                   m_axis_data_tvalid => valid_out1,
+                   m_axis_data_tlast  => last_out1,
+                   m_axis_data_tready => ready_in1,
+                   m_axis_data_tdata  => data_out1    );
+ XL2 : fir_compiler_1
+       port map (  aclk => aclk,
+                   s_axis_data_tvalid => valid_in2,
+                   s_axis_data_tlast  => last_in2,
+                   s_axis_data_tready => ready_out2,
+                   s_axis_data_tdata  => data_in2,
+                                                                                         
+                   m_axis_data_tvalid => valid_out2,
+                   m_axis_data_tlast  => last_out2,
+                   m_axis_data_tready => ready_in2,
+                   m_axis_data_tdata  => data_out2   );               
+ XL3 : fir_compiler_2
+       port map (  aclk => aclk,
+                   s_axis_data_tvalid => valid_in3,
+                   s_axis_data_tlast  => last_in3,
+                   s_axis_data_tready => ready_out3,
+                   s_axis_data_tdata  => data_in3,
+                                                                                     
+                   m_axis_data_tvalid => valid_out3,
+                   m_axis_data_tlast  => last_out3,
+                   m_axis_data_tready => ready_in3,
+                   m_axis_data_tdata  => data_out3    );            
+end Behavioral;
+
+----------------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity demux_1x4 is
+    Port ( ctrl : in STD_LOGIC_VECTOR (1 downto 0);
+          
+          axis_tx_valid_en, axis_tx_last_en : in STD_LOGIC;    
+          axis_tx_ready_en : out STD_LOGIC;
+          axis_tx_data_en : in STD_LOGIC_VECTOR (23 downto 0);
+          
+          axis_tx_valid_CG1,  axis_tx_last_CG1 : out STD_LOGIC; 
+          axis_tx_ready_CG1 : in STD_LOGIC;
+          axis_tx_data_CG1  : out STD_LOGIC_VECTOR (23 downto 0);
+          
+          axis_tx_valid_CG2, axis_tx_last_CG2 : out STD_LOGIC;
+          axis_tx_ready_CG2 : in STD_LOGIC;
+          axis_tx_data_CG2  : out STD_LOGIC_VECTOR (23 downto 0);
+          
+          axis_tx_valid_CG3, axis_tx_last_CG3 : out STD_LOGIC;
+          axis_tx_ready_CG3 : in STD_LOGIC;
+          axis_tx_data_CG3  : out STD_LOGIC_VECTOR (23 downto 0);
+          
+          axis_tx_valid_CG4, axis_tx_last_CG4 : out STD_LOGIC;  
+          axis_tx_ready_CG4 : in STD_LOGIC;
+          axis_tx_data_CG4 : out STD_LOGIC_VECTOR (23 downto 0) );
+          
+end demux_1x4;
+
+architecture Behavioral of demux_1x4 is
+
+begin
+demux_1x4: process(ctrl,axis_tx_valid_en, axis_tx_last_en, axis_tx_data_en,
+    axis_tx_ready_CG1,axis_tx_ready_CG2,axis_tx_ready_CG3,axis_tx_ready_CG4)
+begin
+case ctrl is
+when "10" =>  
+               axis_tx_valid_CG1 <= axis_tx_valid_en;
+               axis_tx_ready_en  <= axis_tx_ready_CG1;
+               axis_tx_last_CG1  <= axis_tx_last_en;
+               axis_tx_data_CG1  <= axis_tx_data_en;   
+when "01" =>  
+               axis_tx_valid_CG2 <= axis_tx_valid_en;
+               axis_tx_ready_en  <= axis_tx_ready_CG2;
+               axis_tx_last_CG2  <= axis_tx_last_en;
+               axis_tx_data_CG2  <= axis_tx_data_en;         
+when "11" =>  
+               axis_tx_valid_CG3 <= axis_tx_valid_en;
+               axis_tx_ready_en  <= axis_tx_ready_CG3;
+               axis_tx_last_CG3  <= axis_tx_last_en;
+               axis_tx_data_CG3  <= axis_tx_data_en;           
+          
+when others => axis_tx_valid_CG4 <= axis_tx_valid_en ;
+               axis_tx_ready_en  <= axis_tx_ready_CG4; 
+               axis_tx_last_CG4  <= axis_tx_last_en; 
+               axis_tx_data_CG4  <= axis_tx_data_en;                                    
+end case;
+end process;
+end Behavioral;
+
+-----------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity mux_4x1 is
+    Port ( ctrl : in STD_LOGIC_VECTOR (1 downto 0);
+           
+           axis_tx_valid_sal, axis_tx_last_sal : out STD_LOGIC; 
+           axis_tx_ready_sal : in STD_LOGIC;
+           axis_tx_data_sal : out STD_LOGIC_VECTOR (31 downto 0);
+           
+           axis_tx_valid_CF1, axis_tx_last_CF1 : in STD_LOGIC;
+           axis_tx_ready_CF1 : out STD_LOGIC;                 
+           axis_tx_data_CF1  : in STD_LOGIC_VECTOR (31 downto 0);
+           
+           axis_tx_valid_CF2, axis_tx_last_CF2 : in STD_LOGIC;
+           axis_tx_ready_CF2 : out STD_LOGIC;         
+           axis_tx_data_CF2  : in STD_LOGIC_VECTOR (31 downto 0);
+           
+           axis_tx_valid_CF3, axis_tx_last_CF3 : in STD_LOGIC;
+           axis_tx_ready_CF3 : out STD_LOGIC;
+           axis_tx_data_CF3  : in STD_LOGIC_VECTOR (31 downto 0);
+           
+           axis_tx_valid_CF4, axis_tx_last_CF4 : in STD_LOGIC;
+           axis_tx_ready_CF4 : out STD_LOGIC;
+           axis_tx_data_CF4  : in STD_LOGIC_VECTOR (31 downto 0)     );
+           
+end mux_4x1;
+
+architecture Behavioral of mux_4x1 is           
+begin
+mux_4x1: process(ctrl,  axis_tx_ready_sal, 
+                 axis_tx_valid_CF1, axis_tx_last_CF1, axis_tx_data_CF1,
+                 axis_tx_valid_CF2, axis_tx_last_CF2, axis_tx_data_CF2,
+                 axis_tx_valid_CF3, axis_tx_last_CF3, axis_tx_data_CF3,
+                 axis_tx_valid_CF4, axis_tx_last_CF4, axis_tx_data_CF4)
+begin
+case ctrl is
+when "10" =>   axis_tx_valid_sal <= axis_tx_valid_CF1;
+               axis_tx_ready_CF1 <= axis_tx_ready_sal;
+               axis_tx_last_sal  <= axis_tx_last_CF1;
+               axis_tx_data_sal  <= axis_tx_data_CF1;
+              
+              
+when "01" =>   axis_tx_valid_sal <= axis_tx_valid_CF2 ;
+               axis_tx_ready_CF2 <= axis_tx_ready_sal ;
+               axis_tx_last_sal  <= axis_tx_last_CF2;
+               axis_tx_data_sal  <= axis_tx_data_CF2;
+                
+                
+when "11" =>   axis_tx_valid_sal <= axis_tx_valid_CF3 ;
+               axis_tx_ready_CF3 <= axis_tx_ready_sal ;
+               axis_tx_last_sal  <= axis_tx_last_CF3;
+               axis_tx_data_sal  <= axis_tx_data_CF3;
+             
+when others => axis_tx_valid_sal <= axis_tx_valid_CF4 ;
+               axis_tx_ready_CF4 <= axis_tx_ready_sal; 
+               axis_tx_last_sal  <= axis_tx_last_CF4; 
+               axis_tx_data_sal  <= axis_tx_data_CF4;                                
+end case;
+end process;
+end Behavioral;
+
+--------------------------------------------------------------------------------
+
+library ieee;
+use ieee.numeric_std.all;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+entity ram_memory is
+
+generic(CONSTANT word_width : integer := 24; 
+        CONSTANT word_depth : integer := 32768;
+        CONSTANT address    : integer := 15  );  
+port(clk  : in  std_logic:='0';
+     en   : in  std_logic:='0';
+     we   : in  std_logic:='0';
+     re   : in  std_logic:='0';
+    addrw : in  std_logic_vector(address-1 downto 0)   
+    := (others => '0');
+    addrr : in  std_logic_vector(address-1 downto 0)   
+    := (others => '0');
+     di   : in  std_logic_vector(word_width-1 downto 0)
+    := (others => '0'); 
+     do   : out std_logic_vector(word_width-1 downto 0)
+    := (others => '0'));
+  
+end ram_memory;
+architecture Behavioral of ram_memory is
+
+type ram_type is array (word_depth-1 downto 0) 
+of std_logic_vector(word_width-1 downto 0);
+signal ram : ram_type:= (others =>(others => '0'));
+
+begin
+  process(clk, we, en)
+  begin
+    if (falling_edge(clk)) then
+      if en = '1' then                    
+        if we = '1' then                  
+          ram(conv_integer(addrw)) <= di;           
+        end if;
+      end if;
+    end if;
+  end process;
+  
+   process(clk, re, en)
+   begin
+     if (falling_edge(clk)) then
+       if en = '1' then           
+         if re = '1' then        
+           do <= (ram(conv_integer(addrr))); -- address read
+         else
+           do <= (others => '0'); 
+         end if;
+       end if;
+     end if;
+   end process;  
+end Behavioral;
+
+-------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity mux_2x1 is
+generic(constant data_width:integer := 24);
+Port(clk   : in std_logic:='0';
+     delay : in std_logic:='0';
+           
+    axis_tx_valid_out, axis_tx_last_out : out std_logic :='0'; 
+    axis_tx_ready_out:in std_logic:='0';
+    axis_tx_data_out:out std_logic_vector(data_width-1 downto 0
+    ):=(others =>'0');
+           
+    axis_tx_valid_CF1, axis_tx_last_CF1 : in std_logic:='0';
+    axis_tx_ready_CF1:out std_logic:='0';                 
+    axis_tx_data_CF1 :in std_logic_vector(data_width-1 downto 0)
+    :=(others =>'0');
+           
+    axis_tx_valid_CF2, axis_tx_last_CF2 : in std_logic:='0';
+    axis_tx_ready_CF2:out std_logic:='0';         
+    axis_tx_data_CF2 :in std_logic_vector(data_width-1 downto 0)
+    :=(others =>'0'));
+           
+end mux_2x1;
+
+architecture Behavioral of mux_2x1 is         
+begin
+mux_2x1: process(clk, delay, 
+                 axis_tx_ready_out, axis_tx_valid_CF1, axis_tx_last_CF1,
+                 axis_tx_data_CF1, axis_tx_valid_CF2, axis_tx_last_CF2,
+                 axis_tx_data_CF2)
+begin
+if( rising_edge(clk)) then
+    if( delay = '1') then 
+            axis_tx_valid_out <= axis_tx_valid_CF1;
+            axis_tx_ready_CF1 <= axis_tx_ready_out;
+            axis_tx_last_out  <= axis_tx_last_CF1;
+            axis_tx_data_out  <= axis_tx_data_CF1;
+           else                  
+            axis_tx_valid_out <= axis_tx_valid_CF2 ;
+            axis_tx_ready_CF2 <= axis_tx_ready_out ;
+            axis_tx_last_out  <= axis_tx_last_CF2;
+            axis_tx_data_out  <= axis_tx_data_CF2;                                                 
+      end if;
+   end if;
+end process;
+end Behavioral;
+
+------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity demux_1x2 is
+generic (constant data_width:integer := 24);
+Port(clk   : in std_logic;
+    delay : in std_logic;
+          
+  axis_tx_valid_in,   axis_tx_last_in  : in std_logic:='0'; 
+  axis_tx_ready_in  :out std_logic:='0';
+  axis_tx_data_in  :in std_logic_vector(data_width-1 downto 0)
+  :=(others =>'0');          
+  axis_tx_valid_CG1,  axis_tx_last_CG1 : out std_logic:='0';
+  axis_tx_ready_CG1 :in std_logic:='0';
+  axis_tx_data_CG1 :out std_logic_vector(data_width-1 downto 0)
+  :=(others =>'0');
+  axis_tx_valid_CG2,  axis_tx_last_CG2 : out std_logic:='0';
+  axis_tx_ready_CG2 :in std_logic:='0';
+  axis_tx_data_CG2 :out std_logic_vector(data_width-1 downto 0)
+  :=(others =>'0'));
+        
+end demux_1x2;
+
+architecture Behavioral of demux_1x2 is
+
+begin
+demux_1x2:process(clk,delay,axis_tx_valid_in
+                  ,axis_tx_last_in,axis_tx_data_in,
+                  axis_tx_ready_CG1,axis_tx_ready_CG2)
+begin
+if( rising_edge(clk)) then
+    if( delay = '1') then 
+              axis_tx_valid_CG1 <= axis_tx_valid_in;
+              axis_tx_ready_in  <= axis_tx_ready_CG1;
+              axis_tx_last_CG1  <= axis_tx_last_in;
+              axis_tx_data_CG1  <= axis_tx_data_in;
+            else   
+              axis_tx_valid_CG2 <= axis_tx_valid_in;
+              axis_tx_ready_in  <= axis_tx_ready_CG2;
+              axis_tx_last_CG2  <= axis_tx_last_in;
+              axis_tx_data_CG2  <= axis_tx_data_in;
+          end if;
+       end if;                                                      
+end process;
+end Behavioral;
+
+----------------------------------------------------------------------------
+
+library IEEE;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_signed.all;
+use IEEE.NUMERIC_STD.ALL;
+entity ring_buffer is
+ generic ( CONSTANT word_width : integer := 24; 
+           CONSTANT word_depth : integer := 32768;
+           CONSTANT address    : integer := 15  ); 
+ Port ( clk            : in  STD_LOGIC:= '0';
+        axis_resetn    : in  STD_LOGIC:= '1'; 
+        time_delay     : in  STD_LOGIC_VECTOR (3 downto 0
+        ):=(others => '0');
+        s_axis_data    : in  STD_LOGIC_VECTOR (word_width-1 downto 0)
+        := (others => '0'); 
+        s_axis_valid   : in  STD_LOGIC:= '0';
+        s_axis_ready   : out STD_LOGIC:= '0';
+        s_axis_last    : in  STD_LOGIC:= '0';                                         
+        m_axis_data    : out STD_LOGIC_VECTOR (word_width-1 downto 0)
+        := (others => '0');
+        m_axis_valid   : out STD_LOGIC:= '0';
+        m_axis_ready   : in  STD_LOGIC:= '0';
+        m_axis_last    : out STD_LOGIC:= '0'       );           
+end ring_buffer;
+architecture Behavioral of ring_buffer is
+
+Type type_data is array(1 downto 0)of std_logic_vector(word_width-1 downto 0); 
+signal data_write : type_data := (others =>(others => '0'));  
+
+type state_type is (Q1,Q2,Q3);
+signal present_state, next_state : state_type;
+
+signal wire_out_counter:std_logic_vector (address-1 downto 0)
+:=(others => '0');
+signal wire_out_add    :std_logic_vector (address-1 downto 0)
+:=(others => '0');
+signal time_delay_value:std_logic_vector (address-1 downto 0)
+:=(others => '0');
+signal s_axis_ready_intern :std_logic := '1';
+signal wire_s_data:std_logic_vector (word_width-1 downto 0)
+:= (others => '0');
+signal en_ram_signal:std_logic :='0';
+signal re_ram_signal:std_logic :='0';
+signal we_ram_signal:std_logic :='0';
+signal ce_counter_signal:std_logic :='0';
+signal s_new_word    :std_logic:='0';
+signal s_new_packet  :std_logic:='0'; 
+signal count  : integer :=32767;
+--------------------------------------------------------------------------
+component ram_memory        
+       port(clk  : in  std_logic;
+            en   : in  std_logic;
+            we   : in  std_logic;
+            re   : in  std_logic;
+           addrw : in  std_logic_vector(address-1 downto 0);
+           addrr : in  std_logic_vector(address-1 downto 0); 
+            di   : in  std_logic_vector(word_width-1 downto 0); 
+            do   : out std_logic_vector(word_width-1 downto 0));
+end component ram_memory;  
+component c_addsub_1
+      port (a  : in  STD_LOGIC_VECTOR (address-1 downto 0);
+            b  : in  STD_LOGIC_VECTOR (address-1 downto 0);                                  
+            s  : out STD_LOGIC_VECTOR (address-1 downto 0) );
+end component;
+-----------------------------------------------------------------------
+begin
+RAM: ram_memory 
+    port map(clk     => clk,
+             en      => en_ram_signal,
+             we      => we_ram_signal,
+             re      => re_ram_signal,                             
+             addrw   => wire_out_counter,
+             addrr   => wire_out_add,
+             di      => wire_s_data,              
+             do      => m_axis_data );            
+ADD:c_addsub_1  
+    port map (a   => wire_out_counter,
+              b   => time_delay_value,                                  
+              s   => wire_out_add   );                                                                               
+----------------------------------------------------------------------
+s_new_word <= '1' when (s_axis_valid = '1' and s_axis_ready_intern = '1')
+                      else '0';           
+s_new_packet <= '1' when (s_new_word = '1' and s_axis_last = '1')
+                      else '0';                    
+s_axis_ready <= s_axis_ready_intern;
+    
+process(clk,time_delay)
+begin
+ if (rising_edge(clk)) then
+   case time_delay is
+       when "1111" => time_delay_value <= "111" & x"F7A";--371ms 
+       when "0111" => time_delay_value <= "100" & x"4E8";--200ms 
+       when "0011" => time_delay_value <= "010" & x"274";--100ms 
+       when "0001" => time_delay_value <= "001" & x"13A";--50 ms       
+       when others => time_delay_value <= "000" & x"371";--10 ms 
+   end case;
+ end if;         
+end process;  
+
+process(clk, ce_counter_signal )
+begin
+  if (rising_edge(clk)) then 
+    if (ce_counter_signal = '1') then    
+       if( count = 0 )then
+           count <= 32767;
+       else    
+           count <= count - 1;
+       end if;
+     end if;    
+  end if;       
+end process; 
+wire_out_counter <= std_logic_vector(to_unsigned(count,15));
+
+process(s_new_packet, s_new_word)
+begin    
+    if (s_new_word = '1')then 
+       if (s_new_packet = '0')then  
+            data_write(0)(word_width-1 downto 0) <= s_axis_data;                  
+         else
+            data_write(1)(word_width-1 downto 0) <= s_axis_data;
+       end if;   
+    end if;      
+end process; 
+
+state_register:process (clk, axis_resetn)
+ begin 
+       if (axis_resetn = '0') then
+                present_state <= Q1;
+       elsif (rising_edge(clk)) then 
+                present_state <= next_state;
+       end if;  
+end process state_register;
+
+C1:process(present_state,s_new_word,s_new_packet)
+begin
+  case present_state is 
+when Q1 =>  ce_counter_signal <= '0';
+            en_ram_signal <= '0';
+            we_ram_signal <= '0';
+            re_ram_signal <= '0';
+               
+            if( s_new_word = '1' ) then 
+                next_state <= Q2;          
+            else
+                next_state <= Q1;
+            end if;                           
+when Q2 =>  wire_s_data <= data_write(0)(word_width-1 downto 0);                  
+            ce_counter_signal <= '1';
+            en_ram_signal <= '1';
+            we_ram_signal <= '1';
+            re_ram_signal <= '1';
+
+            if( s_new_packet = '1') then
+                next_state <= Q3; 
+            else
+                next_state <= Q2;
+            end if;                 
+when Q3 => wire_s_data <= data_write(1)(word_width-1 downto 0);           
+           ce_counter_signal <= '1';
+           en_ram_signal <= '1';
+           we_ram_signal <= '1';
+           re_ram_signal <= '1';
+
+           if ( s_new_packet = '0')then
+                next_state <= Q1;
+           else
+                next_state <= Q3;
+           end if;                        
+  end case; 
+end process C1;
+
+C2:process (clk, axis_resetn)
+begin
+    if (axis_resetn = '0')then
+          m_axis_valid <= '0';
+          m_axis_last  <= '0';
+          s_axis_ready_intern <='1'; 
+    elsif(rising_edge(clk))then    
+         if(present_state = Q1) then
+             m_axis_valid <= '0';
+             m_axis_last  <= '0';
+             s_axis_ready_intern <= '1';
+         elsif(present_state = Q2) then
+             m_axis_valid <= '1';
+             m_axis_last  <= '0';
+             s_axis_ready_intern <= '1';
+         elsif(present_state = Q3) then
+             m_axis_valid <= '1';
+             m_axis_last  <= '1';
+             s_axis_ready_intern <= '0';                                  
+         end if;
+    end if;
+end process C2;
+end Behavioral;
+
+-----------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+entity effect is  
+Generic(constant data_width :integer := 24 );          
+Port (  clk          : in  std_logic:= '0';                                
+        axis_resetn  : in  std_logic:= '1';
+        delay        : in  std_logic:= '0';     
+        time_delay   : in  std_logic_vector (3 downto 0);          
+      
+        s_axis_data  : in  std_logic_vector (data_width-1 downto 0)
+        := (others => '0');
+        s_axis_valid : in  std_logic:= '0';
+        s_axis_ready : out std_logic:= '0';         
+        s_axis_last  : in  std_logic:= '0';    
+        
+        m_axis_data  : out std_logic_vector (data_width-1 downto 0)
+        := (others => '0'); 
+        m_axis_valid : out std_logic:= '0'; 
+        m_axis_ready : in  std_logic:= '0';  
+        m_axis_last  : out std_logic:= '0'                 );
+end effect;
+
+architecture Behavioral of effect is
+--------------------------------------------------------------------
+Type signed is array (3 downto 0) of std_logic_vector(23 downto 0); 
+signal data_storage : signed:= (others =>(others => '0'));
+
+signal circular_buff_wire : std_logic_vector(data_width-1 downto 0)
+:=( others => '0');
+signal s_axis_data_wire  :  std_logic_vector (data_width-1 downto 0)
+:= (others => '0');  
+signal s_axis_valid_wire :  std_logic:= '0';
+signal s_axis_ready_wire :  std_logic:= '0';         
+signal s_axis_last_wire  :  std_logic:= '0'; 
+
+signal m_axis_data_wire  :  std_logic_vector (data_width-1 downto 0)
+:= (others => '0'); 
+signal m_axis_valid_wire :  std_logic:= '0';
+signal m_axis_ready_wire :  std_logic:= '0';         
+signal m_axis_last_wire  :  std_logic:= '0';  
+
+--signal m_axis_data_add  :  std_logic_vector (data_width-1 downto 0)
+:= (others => '0');
+signal m_axis_valid_add :  std_logic:= '0';
+--signal m_axis_ready_add :  std_logic:= '0';         
+signal m_axis_last_add  :  std_logic:= '0'; 
+
+signal A  :  std_logic_vector (data_width-1 downto 0):= (others => '0');
+signal B  :  std_logic_vector (data_width-1 downto 0):= (others => '0');
+signal Add:  std_logic_vector (data_width-1 downto 0):= (others => '0');
+
+signal storage_data_left  :  std_logic:= '0';
+signal storage_data_right  :  std_logic:= '0';
+
+signal buff_left_data    :  std_logic:='0';
+signal buff_right_data   :  std_logic:='0';
+
+signal data_bypass_wire  :  std_logic_vector (data_width-1 downto 0)
+:= (others => '0'); 
+signal valid_bypass_wire :  std_logic:= '0';
+signal ready_bypass_wire :  std_logic:= '0';         
+signal last_bypass_wire  :  std_logic:= '0';   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+component ring_buffer
+    port (clk            : in  STD_LOGIC;
+          axis_resetn    : in  STD_LOGIC; 
+          time_delay     : in  STD_LOGIC_VECTOR (3 downto 0);
+          
+          s_axis_data    : in  STD_LOGIC_VECTOR (data_width-1 downto 0);
+          s_axis_valid   : in  STD_LOGIC;
+          s_axis_ready   : out  STD_LOGIC;
+          s_axis_last    : in  STD_LOGIC;                                      
+                              
+          m_axis_data    : out  STD_LOGIC_VECTOR (data_width-1 downto 0);
+          m_axis_valid   : out  STD_LOGIC;
+          m_axis_ready   : in  STD_LOGIC;
+          m_axis_last    : out  STD_LOGIC );                    
+end component;
+component demux_1x2
+  port ( clk  : in std_logic;
+         delay: in std_logic;
+       
+         axis_tx_valid_in, axis_tx_last_in    : in std_logic;
+         axis_tx_ready_in :out std_logic;
+         axis_tx_data_in : in std_logic_vector (data_width-1 downto 0); 
+             
+         axis_tx_valid_CG1, axis_tx_last_CG1  : out std_logic;
+         axis_tx_ready_CG1 : in std_logic;
+         axis_tx_data_CG1  : out std_logic_vector (data_width-1 downto 0); 
+              
+         axis_tx_valid_CG2, axis_tx_last_CG2  : out std_logic;    
+         axis_tx_ready_CG2 : in std_logic;
+         axis_tx_data_CG2  : out std_logic_vector (data_width-1 downto 0)); 
+  end component;
+component mux_2x1
+   port (clk  : in std_logic;
+         delay: in STD_LOGIC;
+     
+         axis_tx_valid_out, axis_tx_last_out : out std_logic; 
+         axis_tx_ready_out : in std_logic;
+         axis_tx_data_out : out std_logic_vector (data_width-1 downto 0);
+                
+         axis_tx_valid_CF1, axis_tx_last_CF1 : in std_logic;
+         axis_tx_ready_CF1 : out std_logic;                  
+         axis_tx_data_CF1  : in std_logic_vector (data_width-1 downto 0);
+                
+         axis_tx_valid_CF2, axis_tx_last_CF2 : in std_logic;
+         axis_tx_ready_CF2 : out std_logic;         
+         axis_tx_data_CF2  : in std_logic_vector (data_width-1 downto 0));
+  end component;
+component c_addsub_0
+      port (a  : in  STD_LOGIC_VECTOR (data_width-1 downto 0);
+            b  : in  STD_LOGIC_VECTOR (data_width-1 downto 0);                                  
+            s  : out STD_LOGIC_VECTOR (data_width-1 downto 0) );
+  end component;  
+  
+begin
+DEMUX: demux_1x2 
+   port map (clk               => clk,
+             delay             => delay,
+        
+             axis_tx_valid_in  => s_axis_valid,
+             axis_tx_last_in   => s_axis_last,
+             axis_tx_ready_in  => s_axis_ready,
+             axis_tx_data_in   => s_axis_data,
+                     
+             axis_tx_valid_CG1 => s_axis_valid_wire,
+             axis_tx_last_CG1  => s_axis_last_wire,
+             axis_tx_ready_CG1 => s_axis_ready_wire,
+             axis_tx_data_CG1  => s_axis_data_wire,
+                     
+             axis_tx_valid_CG2 => valid_bypass_wire,
+             axis_tx_last_CG2  => last_bypass_wire,
+             axis_tx_ready_CG2 => ready_bypass_wire,
+             axis_tx_data_CG2  => data_bypass_wire     );       
+MUX: mux_2x1 
+  port map ( clk            =>clk,
+             delay          => delay,
+                       
+             axis_tx_valid_out => m_axis_valid,
+             axis_tx_last_out  => m_axis_last,
+             axis_tx_ready_out => m_axis_ready,
+             axis_tx_data_out  => m_axis_data,
+                                    
+             axis_tx_valid_CF1 => m_axis_valid_add,
+             axis_tx_last_CF1  => m_axis_last_add,
+             axis_tx_ready_CF1 => m_axis_ready_wire,
+             axis_tx_data_CF1  => m_axis_data_wire,
+                                                                                  
+             axis_tx_valid_CF2 => valid_bypass_wire,
+             axis_tx_last_CF2  => last_bypass_wire,
+             axis_tx_ready_CF2 => ready_bypass_wire,
+             axis_tx_data_CF2  => data_bypass_wire   );    
+ADD1:c_addsub_0  
+   port map (a   => A,
+             b   => B,                                                         
+             s   => m_axis_data_wire);--Add );
+                       
+r_buffer:ring_buffer 
+             port map (clk            => clk,
+                       axis_resetn    => axis_resetn,
+                       time_delay     => time_delay,
+                       
+                       s_axis_data    => s_axis_data_wire, 
+                       s_axis_valid   => s_axis_valid_wire,
+                       s_axis_ready   => s_axis_ready_wire,
+                       s_axis_last    => s_axis_last_wire,                                                       
+                                             
+                       m_axis_data    => circular_buff_wire,
+                       m_axis_valid   => m_axis_valid_wire,
+                       m_axis_ready   => m_axis_ready_wire,
+                       m_axis_last    => m_axis_last_wire );
+-------------------------------------------------------------------------          
+demux1: process(m_axis_ready_wire, storage_data_left, storage_data_right) 
+begin
+  if(m_axis_ready_wire = '1') then
+     if( storage_data_left = '1' and storage_data_right = '0' )then 
+         A  <=  data_storage(0);
+         B  <=  data_storage(2);     
+     elsif ( storage_data_left = '0' and storage_data_right = '1')then  
+         A  <=  data_storage(1);
+         B  <=  data_storage(3);
+     else
+         A  <=  (others => '0');
+         B  <=  (others => '0');
+     end if;             
+  end if;                                                   
+end process;
+
+ctrl: process(m_axis_ready_wire, storage_data_left, storage_data_right)
+begin
+   if(m_axis_ready_wire = '1') then
+      if( storage_data_left = '1' and storage_data_right = '0' )then 
+          m_axis_valid_add <=  '1';
+          m_axis_last_add  <=  '0';     
+      elsif ( storage_data_left = '0' and storage_data_right = '1')then  
+          m_axis_valid_add <=  '1';
+          m_axis_last_add  <=  '1';
+      else
+          m_axis_valid_add <=  '0';
+          m_axis_last_add  <=  '0';  
+      end if; 
+   end if;                                                  
+end process;
+
+process(clk, s_axis_valid_wire, s_axis_last_wire)
+  begin
+    if (rising_edge(clk)) then    
+        if (s_axis_valid_wire = '1') then 
+              if (s_axis_last_wire = '0') then 
+                  data_storage(0) <= s_axis_data_wire;         
+              else
+                  data_storage(1) <= s_axis_data_wire;
+              end if;    
+       end if;   
+    end if;
+end process;   
+  
+process(clk, m_axis_valid_wire, m_axis_last_wire)
+  begin
+    if (rising_edge(clk)) then    
+        if (m_axis_valid_wire = '1') then 
+              if (m_axis_last_wire = '0') then 
+                  data_storage(2) <= circular_buff_wire;
+                  buff_left_data <= '1';
+              else
+                  data_storage(3) <= circular_buff_wire;
+                  buff_right_data <= '1';
+              end if;
+        else
+           buff_left_data <= '0';
+           buff_right_data<= '0';  
+        end if;
+    end if;
+end process; 
+
+process(clk, buff_left_data, buff_right_data )
+begin
+if(rising_edge(clk))then
+   if(  buff_left_data ='1' and buff_right_data='0')then     
+              storage_data_left <= '1';  
+      else
+              storage_data_left <= '0';    
+   end if;
+ end if;
+end process;      
+
+process(clk, buff_left_data, buff_right_data )
+begin
+if(rising_edge(clk))then
+   if( buff_left_data ='1' and buff_right_data='1')then   
+             storage_data_right <= '1';
+      else  
+             storage_data_right <= '0';  
+   end if;
+ end if;
+end process;                                   
+end Behavioral;
+
+
